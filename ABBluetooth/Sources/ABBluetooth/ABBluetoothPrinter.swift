@@ -9,8 +9,12 @@ public class ABBluetoothPrinter: NSObject, CBPeripheralDelegate, CBCentralManage
     
     private var printerAddress: String?
     private var serviceFn: ((_ peripheral: CBPeripheral) -> [ABBluetoothPrintingServiceInfo]?)?
-    private var printImageFn: ((_ peripheral: CBPeripheral) -> (Int, UIImage?, String?))?
+    private var printImagesFn: ((_ peripheral: CBPeripheral) -> (Int, [ () -> UIImage? ], String?))?
     private var printingServiceInfo: ABBluetoothPrintingServiceInfo?
+//    private var printImagesFn: ((_ peripheral: CBPeripheral) -> (Int, [ () -> UIImage? ], String?))?
+//    private var imageFns: [ () -> UIImage? ]
+    private var imageFns: [ () -> UIImage? ]
+    private var paperWidth: Int
     
     private var centralManager: CBCentralManager!
     
@@ -28,9 +32,11 @@ public class ABBluetoothPrinter: NSObject, CBPeripheralDelegate, CBCentralManage
         self.compareLimit = 0
         self.errorFn = errorFn
         self.messageFn = messageFn
-        
         self.printingServiceInfo = nil
         self.warnings = []
+
+        self.imageFns = []
+        self.paperWidth = 0
     }
     
     public func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
@@ -108,22 +114,28 @@ public class ABBluetoothPrinter: NSObject, CBPeripheralDelegate, CBCentralManage
             reset()
             return
         }
-        
-        guard printImageFn != nil else {
+
+        guard printImagesFn != nil else {
             print("ABBluetoothPrinter -> Error: 'printImageFn' not set.")
             errorFn(Lang.t(TABBluetooth.errors_UnknownError))
             reset()
             return
         }
-        
-        let (paperWidth, image, message) = printImageFn!(peripheral)
+    
+        let (paperWidth_T, imageFns_T, message) = printImagesFn!(peripheral)
+        paperWidth = paperWidth_T
+        imageFns = imageFns_T
         
         if let message {
             messageFn(message)
         }
         
-        if let image {
-            sendImageData(img: image, width: paperWidth)
+        if imageFns.count > 0 {
+            let image = imageFns[0]()
+            imageFns.remove(at: 0)
+            if let image {
+                sendImageData(img: image)
+            }
         } else {
             errorFn(Lang.t(TABBluetooth.errors_CannotGenerateImage))
             reset()
@@ -194,9 +206,18 @@ public class ABBluetoothPrinter: NSObject, CBPeripheralDelegate, CBCentralManage
     public func peripheralIsReady(toSendWriteWithoutResponse peripheral: CBPeripheral) {
         let subData: Data! = self.extractData(from: &self.dataToSend)
         if subData == nil {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                self.centralManager.cancelPeripheralConnection(self.peripheral)
+            if (imageFns.count > 0) {
+                let image = imageFns[0]()
+                imageFns.remove(at: 0)
+                if let image {
+                    sendImageData(img: image)
+                }
+            } else {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                    self.centralManager.cancelPeripheralConnection(self.peripheral)
+                }
             }
+            
             return
         }
             
@@ -213,10 +234,13 @@ public class ABBluetoothPrinter: NSObject, CBPeripheralDelegate, CBCentralManage
         }
     }
     
-    public func printImage(printerAddress: String, serviceFn: @escaping (_ peripheral: CBPeripheral) -> [ABBluetoothPrintingServiceInfo]?, printImageFn: @escaping (_ peripheral: CBPeripheral) -> (Int, UIImage?, String?)) {
+    public func printImages(printerAddress: String, serviceFn: @escaping (_ peripheral: CBPeripheral) -> [ABBluetoothPrintingServiceInfo]?, printImagesFn: @escaping (_ peripheral: CBPeripheral) -> (Int, [ () -> UIImage? ], String?)) {
         self.printerAddress = printerAddress
         self.serviceFn = serviceFn
-        self.printImageFn = printImageFn
+        self.printImagesFn = printImagesFn
+//    public func printImages(printerAddress: String, printImagesFn: @escaping (_ peripheral: CBPeripheral) -> (Int, [ () -> UIImage? ], String?)) {
+//        self.printerAddress = printerAddress
+//        self.printImagesFn = printImagesFn
         
         self.peripheral = nil
         self.characteristic = nil
@@ -264,12 +288,22 @@ public class ABBluetoothPrinter: NSObject, CBPeripheralDelegate, CBCentralManage
     
     private func reset() {
         printerAddress = nil
-        printImageFn = nil
+        printImagesFn = nil
         printingServiceInfo = nil
         warnings = []
+//        self.printerAddress = nil
+//        self.printImagesFn = nil
+//        self.imageFns = []
+//        self.paperWidth = 0
     }
     
-    private func sendImageData(img: UIImage, width: Int) {
+    private func sendImageData(img: UIImage) {
+        if (paperWidth == 0) {
+            print("ABBluetoothPrinter -> Error: Paper width not set")
+            return
+        }
+        let width = paperWidth
+        
         let f = Float(width) / Float(img.size.width)
         let height = Int(Float(img.size.height) * f)
 
