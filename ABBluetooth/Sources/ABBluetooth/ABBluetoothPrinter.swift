@@ -4,10 +4,13 @@ import SwiftUI
 import ABLibs
 
 public class ABBluetoothPrinter: NSObject, CBPeripheralDelegate, CBCentralManagerDelegate {
-    static let packetLength = 32
+//    static let packetLength = 32
+    static let maxCompareLimit = 1000
     
     private var printerAddress: String?
+    private var serviceFn: ((_ peripheral: CBPeripheral) -> [ABBluetoothPrintingServiceInfo]?)?
     private var printImageFn: ((_ peripheral: CBPeripheral) -> (Int, UIImage?, String?))?
+    private var printingServiceInfo: ABBluetoothPrintingServiceInfo?
     
     private var centralManager: CBCentralManager!
     
@@ -19,11 +22,15 @@ public class ABBluetoothPrinter: NSObject, CBPeripheralDelegate, CBCentralManage
     private var errorFn: (_ errorMessage: String) -> Void
     private var messageFn: (_ message: String) -> Void
     
+    private var warnings: [String]
     
     public init(errorFn: @escaping ((_ errorMessage: String) -> Void), messageFn: @escaping ((_ warningMessage: String) -> Void)) {
         self.compareLimit = 0
         self.errorFn = errorFn
         self.messageFn = messageFn
+        
+        self.printingServiceInfo = nil
+        self.warnings = []
     }
     
     public func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
@@ -40,6 +47,7 @@ public class ABBluetoothPrinter: NSObject, CBPeripheralDelegate, CBCentralManage
     
     public func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [ String: Any ], rssi RSSI: NSNumber) {
         print("ABBluetoothPrinter -> Comparing " + peripheral.identifier.uuidString + ":" + self.printerAddress!)
+        
         if (peripheral.identifier.uuidString == self.printerAddress && self.peripheral == nil) {
             print("ABBluetoothPrinter -> Dicovered: " + (peripheral.name ?? "-"))
             
@@ -60,12 +68,38 @@ public class ABBluetoothPrinter: NSObject, CBPeripheralDelegate, CBCentralManage
     }
     
     public func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
-        if let characteristics = service.characteristics {
+
+        guard let printingServiceInfo else {
+            print("ABBluetoothPrinter -> Error: 'printingServiceInfo' not set.")
+            errorFn(Lang.t(TABBluetooth.errors_UnknownError))
+            reset()
+            return
+        }
+        
+        for printingCharacteristic in printingServiceInfo.characteristicsUUIDs {
+            guard let characteristics = service.characteristics else {
+                errorFn(Lang.t(TABBluetooth.errors_CannotFindCharacteristics))
+                reset()
+                return
+            }
+            
             for characteristic in characteristics {
-                if (characteristic.properties.rawValue & CBCharacteristicProperties.writeWithoutResponse.rawValue != 0) {
+                if printingCharacteristic == nil {
+                    if (characteristic.properties.rawValue & CBCharacteristicProperties.writeWithoutResponse.rawValue != 0) {
+                        self.characteristic = characteristic
+                        warnings.append(Lang.t(TABBluetooth.warnings_UnknownPrintingCharacteristic))
+                        break
+                    }
+                }
+                
+                if characteristic.uuid.uuidString == printingCharacteristic {
                     self.characteristic = characteristic
                     break
                 }
+            }
+            
+            if self.characteristic != nil {
+                break
             }
         }
         
@@ -74,9 +108,9 @@ public class ABBluetoothPrinter: NSObject, CBPeripheralDelegate, CBCentralManage
             reset()
             return
         }
-    
         
         guard printImageFn != nil else {
+            print("ABBluetoothPrinter -> Error: 'printImageFn' not set.")
             errorFn(Lang.t(TABBluetooth.errors_UnknownError))
             reset()
             return
@@ -97,14 +131,40 @@ public class ABBluetoothPrinter: NSObject, CBPeripheralDelegate, CBCentralManage
     }
     
     public func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
-        var s: CBService!
-        if let services = peripheral.services {
-            for service in services {
-                if !ABBluetoothPrinterPeripheral.PrintingServiceUUIDs.contains(service.uuid) {
-                    continue
+        var s: CBService?
+        guard let serviceFn else {
+            print("ABBluetoothPrinter -> Error: 'printingServiceInfo' not set.")
+            errorFn(Lang.t(TABBluetooth.errors_UnknownError))
+            reset()
+            return
+        }
+        
+        guard let printingServiceInfos = serviceFn(peripheral) else {
+            print("ABBluetoothPrinter -> 'nil' result from 'serviceFn'.")
+            errorFn(Lang.t(TABBluetooth.errors_UnknownError))
+            reset()
+            return
+        }
+        
+        for printingServiceInfo in printingServiceInfos {
+            if let services = peripheral.services {
+                for service in services {
+                    if printingServiceInfo.serviceUUID == nil {
+                        s = service
+                        self.printingServiceInfo = printingServiceInfo
+                        warnings.append(Lang.t(TABBluetooth.warnings_UnknownPrintingService))
+                        break
+                    }
+                    
+                    if service.uuid.uuidString == printingServiceInfo.serviceUUID {
+                        s = service
+                        self.printingServiceInfo = printingServiceInfo
+                        break
+                    }
                 }
-                
-                s = service
+            }
+            
+            if s != nil {
                 break
             }
         }
@@ -118,9 +178,8 @@ public class ABBluetoothPrinter: NSObject, CBPeripheralDelegate, CBCentralManage
     
     public func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
 //        if let data = characteristic.value {
-//            print("Yes2 " + String(data.count))
-//        } else {
-//            print("Nope2")
+//            let str = String(data: data, encoding: .ascii)
+//            print("Characteristic response: \(characteristic) \(str)")
 //        }
     }
     
@@ -154,15 +213,14 @@ public class ABBluetoothPrinter: NSObject, CBPeripheralDelegate, CBCentralManage
         }
     }
     
-    
-    
-    public func printImage(printerAddress: String, printImageFn: @escaping (_ peripheral: CBPeripheral) -> (Int, UIImage?, String?)) {
+    public func printImage(printerAddress: String, serviceFn: @escaping (_ peripheral: CBPeripheral) -> [ABBluetoothPrintingServiceInfo]?, printImageFn: @escaping (_ peripheral: CBPeripheral) -> (Int, UIImage?, String?)) {
         self.printerAddress = printerAddress
+        self.serviceFn = serviceFn
         self.printImageFn = printImageFn
         
         self.peripheral = nil
         self.characteristic = nil
-        self.compareLimit = 250
+        self.compareLimit = ABBluetoothPrinter.maxCompareLimit
         self.centralManager = CBCentralManager(delegate: self, queue: nil)
         
         var bluetoothPermission:Bool
@@ -189,13 +247,14 @@ public class ABBluetoothPrinter: NSObject, CBPeripheralDelegate, CBCentralManage
         }
     }
     
-    
     private func extractData(from data: inout Data) -> Data? {
         guard data.count > 0 else {
             return nil
         }
         
-        let length = min(ABBluetoothPrinter.packetLength, data.count)
+        let maxLength = peripheral.maximumWriteValueLength(for: .withoutResponse)
+        print("Test -> Length: \(maxLength)")
+        let length = min(maxLength, data.count)
         let range = 0..<length
         let subData = data.subdata(in: range)
         data.removeSubrange(range)
@@ -204,8 +263,10 @@ public class ABBluetoothPrinter: NSObject, CBPeripheralDelegate, CBCentralManage
     }
     
     private func reset() {
-        self.printerAddress = nil
-        self.printImageFn = nil
+        printerAddress = nil
+        printImageFn = nil
+        printingServiceInfo = nil
+        warnings = []
     }
     
     private func sendImageData(img: UIImage, width: Int) {
@@ -323,8 +384,17 @@ public class ABBluetoothPrinter: NSObject, CBPeripheralDelegate, CBCentralManage
     }
 }
 
-class ABBluetoothPrinterPeripheral: NSObject {
+public struct ABBluetoothPrintingServiceInfo {
+    let serviceUUID: String?
+    let characteristicsUUIDs: [String?]
     
+    public init(_ serviceUUID: String?, _ characteristicsUUIDs: [String?]) {
+        self.serviceUUID = serviceUUID
+        self.characteristicsUUIDs = characteristicsUUIDs
+    }
+}
+
+class ABBluetoothPrinterPeripheral: NSObject {
     public static let PrinterUUID = CBUUID.init(string: "")
     public static let PrintingServiceUUIDs = [ CBUUID.init(string: "18F0"), CBUUID.init(string: "1804") ]
 //    public static let PrintingServiceUUID = CBUUID.init(string: "18F0")
