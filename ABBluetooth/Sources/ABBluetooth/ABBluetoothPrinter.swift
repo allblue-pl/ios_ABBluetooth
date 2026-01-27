@@ -171,6 +171,7 @@ public class ABBluetoothPrinter: NSObject, CBPeripheralDelegate, CBCentralManage
                     if service.uuid.uuidString == printingServiceInfo.serviceUUID {
                         s = service
                         self.printingServiceInfo = printingServiceInfo
+                        print("Printing Service UUID -> " + service.uuid.uuidString)
                         break
                     }
                 }
@@ -277,7 +278,6 @@ public class ABBluetoothPrinter: NSObject, CBPeripheralDelegate, CBCentralManage
         }
         
         let maxLength = peripheral.maximumWriteValueLength(for: .withoutResponse)
-        print("Test -> Length: \(maxLength)")
         let length = min(maxLength, data.count)
         let range = 0..<length
         let subData = data.subdata(in: range)
