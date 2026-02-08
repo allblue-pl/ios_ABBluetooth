@@ -214,14 +214,15 @@ public class ABBluetoothPrinter: NSObject, CBPeripheralDelegate, CBCentralManage
                     sendImageData(img: image)
                 }
             } else {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
                     self.centralManager.cancelPeripheralConnection(self.peripheral)
+                    self.peripheral = nil
                 }
             }
             
             return
         }
-            
+        
         peripheral.writeValue(subData, for: self.characteristic, type: CBCharacteristicWriteType.withoutResponse)
     }
     
@@ -236,6 +237,11 @@ public class ABBluetoothPrinter: NSObject, CBPeripheralDelegate, CBCentralManage
     }
     
     public func printImages(printerAddress: String, serviceFn: @escaping (_ peripheral: CBPeripheral) -> [ABBluetoothPrintingServiceInfo]?, printImagesFn: @escaping (_ peripheral: CBPeripheral) -> (Int, [ () -> UIImage? ], String?)) {
+        if let peripheral_Old = self.peripheral {
+            self.centralManager.cancelPeripheralConnection(peripheral_Old)
+            self.peripheral = nil
+        }
+        
         self.printerAddress = printerAddress
         self.serviceFn = serviceFn
         self.printImagesFn = printImagesFn
@@ -243,7 +249,6 @@ public class ABBluetoothPrinter: NSObject, CBPeripheralDelegate, CBCentralManage
 //        self.printerAddress = printerAddress
 //        self.printImagesFn = printImagesFn
         
-        self.peripheral = nil
         self.characteristic = nil
         self.compareLimit = ABBluetoothPrinter.maxCompareLimit
         self.centralManager = CBCentralManager(delegate: self, queue: nil)
@@ -412,7 +417,7 @@ public class ABBluetoothPrinter: NSObject, CBPeripheralDelegate, CBCentralManage
     ////            print("Sent some data")
     //        }
     
-            print("ABBluetoothPrinter -> Sent all data")
+//            print("ABBluetoothPrinter -> Sent all data")
     
     //        self.centralManager.cancelPeripheralConnection(self.peripheral)
     }
